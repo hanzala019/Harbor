@@ -1,0 +1,1 @@
+export default { content: ['./index.html', './src/**/*.{ts,tsx}'], theme: { extend: { colors: { primary: '#087f83', background: '#f5f9fa', foreground: '#16343c', border: '#dbe6e8' } } }, plugins: [] };

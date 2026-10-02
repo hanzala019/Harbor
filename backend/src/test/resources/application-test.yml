@@ -1,0 +1,10 @@
+spring:
+  datasource:
+    url: ${TEST_DB_URL:jdbc:h2:mem:hospital;MODE=PostgreSQL;DB_CLOSE_DELAY=-1;LOCK_TIMEOUT=10000}
+    username: ${TEST_DB_USER:sa}
+    password: ${TEST_DB_PASSWORD:}
+app:
+  admin-email: integration-admin@hospital.test
+  admin-password: integration-admin-password
+  seed: false
+  mail-enabled: false

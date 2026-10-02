@@ -1,0 +1,24 @@
+# Repository context
+
+- Read `requirements.md` for product rules and `README.md` for native Windows/Docker setup. The workspace path does not imply a Python backend.
+- V1 is the completed baseline; `ROADMAP.md` tracks all 18 agreed V2 enhancements. Treat unchecked items as pending and retain V1 product invariants when implementing them.
+- `backend` is Spring Boot/JPA/PostgreSQL 17; `frontend` is React/Vite with shadcn-style Radix components, Tailwind, React Router, and React Hook Form/Zod. Java bytecode targets 17 and was verified on Java 19.0.2. On this Windows machine, `JAVA_HOME` originally pointed to Java 11 despite `java` resolving to 19; set it to `C:\Program Files\Java\jdk-19` for Maven.
+- From root on Windows: `powershell -ExecutionPolicy Bypass -File .\backend\mvnw.ps1 verify`; focused test: append `'-Dtest=HospitalIntegrationTest' test` instead of `verify`. On Linux/macOS use `sh backend/mvnw verify`. The scripts bootstrap Maven 3.9.9 with checksum verification.
+- In `frontend`: `npm ci`, `npm run build` (TypeScript then Vite), `npm test` (queue tests). Vite proxies `/api` to localhost:8080 (override with `API_PROXY`); Docker nginx proxies it to `backend:8080` and provides SPA fallback. Port 8080 was occupied on this machine; native testing used backend `PORT=18080` and frontend `API_PROXY=http://localhost:18080`.
+- Native Spring Boot imports root `.env` as properties from root or `backend` working directories; environment variables override it. Compose also reads `.env`. Keep its values unquoted and credentials out of tracked files. `ADMIN_PASSWORD` bootstraps the first admin only, not password resets. `SEED_DEMO` creates doctors/sessions only when no doctors exist.
+- Flyway migrations live in `backend/src/main/resources/db/migration`; Hibernate validates the schema. Integration tests apply the same migration to H2 by default; `TEST_DB_URL/USER/PASSWORD` can target a dedicated PostgreSQL test database and must never target normal app data.
+- JPA entities are nested in `Models`; `HospitalService` owns transactional business rules using `EntityManager`. Booking/queue mutations lock schedule rows; keep stable ID lock ordering for transfers and refresh locked state before validation. Auth uses database-hashed, expiring bearer tokens, not cookies; never return raw account entities/password hashes or guest claim hashes.
+- Weekly scheduling expands weekday/time-range rules into dated sessions for a bounded date window; preview and create use the same validation. Creation locks the doctor like single-session creation, skips identical sessions without changing availability, and rejects overlapping batches atomically. Bulk doctor assignments upsert under a receptionist-account lock and apply one permission set to the complete selection.
+- Emails enter `mail_jobs` in the booking transaction; `MailWorker` sends committed outbox jobs with retries. `MAIL_ENABLED=false` queues without delivery. Compose's optional `mail` profile supplies Mailpit; its inbox is localhost:8025.
+
+## Product invariants
+
+- No billing, service fees, payments, or payment gateway functionality.
+- Guest booking is **Quick Appointment** and must work without login or registration. Offer **Save My Details / Register as Patient** only after confirmation; skipping it must preserve the confirmed booking. Reuse the entered patient information when registering.
+- Public registration creates only Patient accounts; only Admin can create Receptionist accounts. Receptionist login redirects to the receptionist Appointments page.
+- Receptionist access is scoped to Admin-assigned doctors and granular view/edit permissions for doctor information, schedules, and availability. Enforce authorization on backend endpoints as well as protected pages.
+- Assign serials only upon successful confirmation. Serials are local to a doctor/date/session/schedule, not hospital-wide; prevent double-booking a doctor slot and derive estimated consultation/arrival times from the schedule and queue position.
+- The receptionist multi-doctor Ongoing table interleaves each doctor's next pending patients round-robin, rather than sorting globally by serial. Exclude cancelled, visited, and no-show appointments from active queues; retain visited/no-show history.
+- Schedule changes must identify affected appointments before notification or rescheduling. Transferring active patients preserves their relative order and recalculates serials after removing cancelled appointments.
+- Send confirmation email after successful booking; schedule-change notifications are triggered by authorized staff. Rescheduling email includes updated date/time, serial, room, and doctor; never expose other patients' information.
+- The landing hero uses medical illustrations/vector artwork, not real-human photographs, and the primary CTA is **Make An Appointment**. Use shadcn/ui as the main component system.

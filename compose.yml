@@ -1,0 +1,50 @@
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: harbor
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env}
+    volumes:
+      - hospital-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d harbor"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+  backend:
+    build: ./backend
+    environment:
+      DB_URL: jdbc:postgresql://db:5432/harbor
+      DB_USER: postgres
+      DB_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@hospital.local}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Set ADMIN_PASSWORD in .env}
+      SEED_DEMO: ${SEED_DEMO:-false}
+      MAIL_ENABLED: ${MAIL_ENABLED:-false}
+      SMTP_HOST: ${SMTP_HOST:-mailpit}
+      SMTP_PORT: ${SMTP_PORT:-1025}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_AUTH: ${SMTP_AUTH:-false}
+      SMTP_TLS: ${SMTP_TLS:-false}
+      MAIL_FROM: ${MAIL_FROM:-appointments@hospital.local}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+  frontend:
+    build: ./frontend
+    ports:
+      - "${WEB_PORT:-3000}:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+  mailpit:
+    image: axllent/mailpit:v1.29
+    profiles: ["mail"]
+    ports:
+      - "127.0.0.1:8025:8025"
+volumes:
+  hospital-data:

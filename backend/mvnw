@@ -1,0 +1,21 @@
+#!/usr/bin/env sh
+set -eu
+version=3.9.9
+cache="${MAVEN_BOOTSTRAP_HOME:-$HOME/.cache/hospital-maven}"
+maven="$cache/apache-maven-$version/bin/mvn"
+if [ ! -f "$maven" ]; then
+  mkdir -p "$cache"
+  url="https://repo.maven.apache.org/maven2/org/apache/maven/apache-maven/$version/apache-maven-$version-bin.tar.gz"
+  curl -fsSL "$url" -o "$cache/maven.tar.gz"
+  curl -fsSL "$url.sha512" -o "$cache/maven.sha512"
+  expected=$(tr -d '\r\n' < "$cache/maven.sha512")
+  if command -v sha512sum >/dev/null 2>&1; then
+    actual=$(sha512sum "$cache/maven.tar.gz" | cut -d ' ' -f 1)
+  else
+    actual=$(shasum -a 512 "$cache/maven.tar.gz" | cut -d ' ' -f 1)
+  fi
+  [ "$expected" = "$actual" ] || { printf '%s\n' 'Maven checksum failed' >&2; exit 1; }
+  tar -xzf "$cache/maven.tar.gz" -C "$cache"
+  rm "$cache/maven.tar.gz" "$cache/maven.sha512"
+fi
+exec "$maven" -f "$(dirname "$0")/pom.xml" "$@"
