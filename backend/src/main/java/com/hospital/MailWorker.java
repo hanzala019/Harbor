@@ -22,8 +22,8 @@ public class MailWorker {
         if(!enabled)return;
         for(MailJob j:em.createQuery("from MailJob where sent=false and attempts<10 order by id",MailJob.class).setMaxResults(20).setLockMode(LockModeType.PESSIMISTIC_WRITE).getResultList()) {
             j.attempts++;
-            try {SimpleMailMessage m=new SimpleMailMessage();m.setFrom(from);m.setTo(j.recipient);m.setSubject(j.subject);m.setText(j.body);sender.send(m);j.sent=true;}
-            catch(Exception e){LoggerFactory.getLogger(MailWorker.class).warn("Mail job {} could not be delivered (attempt {})",j.id,j.attempts);}
+            try {SimpleMailMessage m=new SimpleMailMessage();m.setFrom(from);m.setTo(j.recipient);m.setSubject(j.subject);m.setText(j.body);sender.send(m);j.sent=true;j.sentAt=java.time.Instant.now();j.lastError=null;}
+            catch(Exception e){j.lastError="SMTP delivery failed; check SMTP configuration and connectivity.";LoggerFactory.getLogger(MailWorker.class).warn("Mail job {} could not be delivered (attempt {}, {})",j.id,j.attempts,e.getClass().getSimpleName());}
         }
     }
 }

@@ -1,0 +1,18 @@
+import net from 'node:net';
+import http from 'node:http';
+import {spawn} from 'node:child_process';
+import {fileURLToPath} from 'node:url';
+import path from 'node:path';
+const root=fileURLToPath(new URL('../../',import.meta.url));
+const database=process.env.TEST_DB_URL;
+if(!database||!database.startsWith('jdbc:postgresql://')||new URL(database.slice(5)).pathname==='/harbor')throw new Error('Set TEST_DB_URL to a dedicated PostgreSQL test database, not the normal harbor database. Also set TEST_DB_USER and TEST_DB_PASSWORD.');
+const messages=[];
+const smtp=net.createServer(socket=>{socket.write('220 localhost test SMTP\r\n');let buffer='',data=false,message='';socket.on('data',chunk=>{buffer+=chunk.toString();let at;while((at=buffer.indexOf('\n'))>=0){const line=buffer.slice(0,at).replace(/\r$/,'');buffer=buffer.slice(at+1);if(data){if(line==='.'){messages.push(message);message='';data=false;socket.write('250 accepted\r\n');}else message+=line+'\n';}else if(/^EHLO|^HELO/i.test(line))socket.write('250-localhost\r\n250 SIZE 1000000\r\n');else if(/^DATA/i.test(line)){data=true;socket.write('354 send message\r\n');}else if(/^QUIT/i.test(line)){socket.write('221 goodbye\r\n');socket.end();}else socket.write('250 OK\r\n');}});socket.on('error',()=>{});});
+await new Promise(r=>smtp.listen(0,'127.0.0.1',r));
+const inspector=http.createServer((q,r)=>{r.setHeader('Content-Type','application/json');r.end(JSON.stringify(messages));});await new Promise(r=>inspector.listen(0,'127.0.0.1',r));
+const backendPort=Number(process.env.E2E_BACKEND_PORT||28080),webPort=Number(process.env.E2E_WEB_PORT||15173),base=`http://127.0.0.1:${webPort}`;
+const processes=[];let logs='';const start=(command,args,options={})=>{const p=spawn(command,args,{cwd:root,...options});processes.push(p);p.on('error',e=>logs+=e.message);p.stdout.on('data',d=>logs+=d);p.stderr.on('data',d=>logs+=d);return p;};
+const backend=start(process.env.E2E_JAVA||'java',['-jar',path.join(root,'backend/target/hospital-1.0.0.jar')],{env:{...process.env,PORT:String(backendPort),DB_URL:database,DB_USER:process.env.TEST_DB_USER||'postgres',DB_PASSWORD:process.env.TEST_DB_PASSWORD||'',ADMIN_EMAIL:'feature-admin@hospital.test',ADMIN_PASSWORD:'feature-admin-password',SEED_DEMO:'false',HOSPITAL_TIMEZONE:'Asia/Dhaka',MAIL_ENABLED:'true',SMTP_HOST:'127.0.0.1',SMTP_PORT:String(smtp.address().port),SMTP_AUTH:'false',SMTP_TLS:'false',SMTP_USER:'',SMTP_PASSWORD:'',MAIL_FROM:'testing@hospital.test',PUBLIC_URL:base}});
+start(process.execPath,[path.join(root,'frontend/node_modules/vite/bin/vite.js'),'--host','127.0.0.1','--port',String(webPort),'--strictPort'],{cwd:path.join(root,'frontend'),env:{...process.env,API_PROXY:`http://127.0.0.1:${backendPort}`}});
+async function ready(url){for(let i=0;i<120;i++){if(backend.exitCode!==null)throw new Error(logs);try{if((await fetch(url)).ok)return;}catch{}await new Promise(r=>setTimeout(r,1000));}throw new Error(logs);}
+try{await Promise.all([ready(`http://127.0.0.1:${backendPort}/api/health`),ready(base)]);const test=start(process.execPath,[path.join(root,'frontend/e2e/v2-smoke.mjs')],{cwd:path.join(root,'frontend'),env:{...process.env,E2E_BASE_URL:base,E2E_GUEST_TOKEN_URL:`http://127.0.0.1:${inspector.address().port}`}});test.stdout.on('data',d=>process.stdout.write(d));test.stderr.on('data',d=>process.stderr.write(d));const code=await new Promise(r=>test.on('exit',r));if(code)process.exitCode=code;else console.log(`V2 browser checks passed; ${messages.length} emails accepted by the local SMTP fixture.`);}catch(e){console.error(e);process.exitCode=1;}finally{for(const p of processes)if(p.exitCode===null)p.kill();smtp.close();inspector.close();}

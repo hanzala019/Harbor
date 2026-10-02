@@ -4,7 +4,28 @@ React + TypeScript/Vite, shadcn/ui + Tailwind, Spring Boot REST API, Spring Secu
 
 ## Version milestone
 
-**V1 is complete; V2 development starts from this baseline.** The complete agreed V2 scope, including all 18 quality-of-life enhancements and the single-command local launcher, is tracked in [`ROADMAP.md`](ROADMAP.md).
+**V1 is the baseline; all 18 agreed V2 enhancements are implemented and covered by native and Docker verification.** Feature completion and deployment status are tracked in [`ROADMAP.md`](ROADMAP.md). Docker Desktop Linux-container builds, browser workflows through nginx, Mailpit delivery, and database persistence across Compose shutdown/restart have passed on this device.
+
+## Quick local startup (V2)
+
+Stop any older backend/frontend terminals with **Ctrl+C**, then run from the repository root:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\start-local.ps1
+```
+
+The launcher loads `.env`, finds JDK 17+ (including this machine's Java 19), checks Node and PostgreSQL access, installs frontend dependencies if missing, builds an absent/outdated backend jar, and starts both servers with matching available ports. It prints the actual URL and opens the browser. Keep this terminal open; **Ctrl+C** stops the processes the launcher started, without stopping PostgreSQL or unrelated servers.
+
+Useful options:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\start-local.ps1 -CheckOnly
+powershell -ExecutionPolicy Bypass -File .\start-local.ps1 -NoBrowser
+powershell -ExecutionPolicy Bypass -File .\start-local.ps1 -BackendPort 18080 -WebPort 5173
+powershell -ExecutionPolicy Bypass -File .\start-local.ps1 -SmokeTest -NoBrowser
+```
+
+`-CheckOnly` checks prerequisites without starting servers. `-SmokeTest` starts both, checks their HTTP endpoints, then shuts them down. Occupied preferred ports are replaced with nearby available ports. The manual commands below remain supported.
 
 ## Run locally on Windows (without Docker)
 
@@ -88,6 +109,23 @@ For Gmail, use `SMTP_HOST=smtp.gmail.com`, `SMTP_PORT=587`, `SMTP_AUTH=true`, an
 
 ## Features and workflows
 
+### V2 quality-of-life features
+
+- **Calendar and templates:** the Doctors page has a seven-day calendar with session hours, booking counts, and availability. Click a day/session to open its actions. **Copy this week** opens the weekly wizard with its available hours; mixed visit durations require separate templates. Save named templates inside the wizard, search/select one to reuse it, and preview before applying it to another date window.
+- **Search, sorting, and pagination:** doctor/receptionist selectors support typing, arrow keys, and Enter. Staff/admin tables have sorting and 15/30/50-row pagination; Ongoing keeps round-robin order instead of exposing global sorting. Filters, selected doctors, dates, and table preferences are remembered per account. Use local reset buttons or **Reset saved filters** in the footer to clear preferences.
+- **Permission presets:** Team & access offers View only, Scheduling desk (schedule + availability editing), and Full doctor management. Review or override individual flags before saving the complete selection.
+- **Live queues and feedback:** queues refresh every 30 seconds while the page is visible, with an optional pause checkbox, last-update time, and manual refresh. Mutations show consistent success notifications, including created/updated counts where applicable.
+- **Email tools:** Tools & history → Email delivery shows queued/retrying/sent/failed status and supports resending confirmations. Appointment rows also have a resend action, including V1 records without linked email history. A pending job blocks duplicate resends. SMTP acceptance is recorded as SENT, not proof of inbox delivery; the worker retries up to 10 attempts.
+- **Guest management:** new guest confirmation/rescheduling emails contain an appointment-scoped private link. The random token is hashed in the database, expires after 30 days, and is sent in a URL fragment. Guests can view or cancel active future appointments without registering. Cancellation, account claiming, or staff link revocation invalidates the links. Resending a guest confirmation generates a fresh link.
+- **Duplicate detection:** registered patients are matched by account; guests by normalized email and digit-normalized phone. An active appointment with the same doctor/date blocks another booking. Authorized staff booking from the doctor page see an alert and must deliberately confirm again to override it; the override is audited.
+- **History and timezone:** Upcoming uses consultation time as well as active status. Past unprocessed appointments appear in history without changing their status. Appointment times and email details use `HOSPITAL_TIMEZONE` (an IANA zone, configured locally as `Asia/Dhaka`) and carry an absolute consultation instant. Configure the same zone for native and Docker deployments.
+- **Account security:** the avatar menu → Account security changes your password after checking the current password, then revokes all sessions. Admin can disable/enable receptionists, reset their passwords, and revoke sessions under Tools & history → Receptionist accounts. Changing `.env` never resets an existing account's password.
+- **Audit and selective transfers:** Tools & history → Audit history supports date/search filters and records actors, times, records, and change details without raw passwords/tokens. Receptionists see only assigned-doctor history. In affected-patient review, select the patients who agreed to move; unselected patients remain in place, capacity is checked atomically, and only selected patients get rescheduling notifications.
+
+`PUBLIC_URL` must be the reachable frontend URL used in guest emails. The launcher sets it to its chosen port. Compose uses `DOCKER_PUBLIC_URL` (default `http://localhost:3000`); set it to your deployed HTTPS URL when hosting remotely. Do not change the hospital timezone after bookings exist without reviewing their intended interpretation.
+
+### V1 foundations
+
 - Guests use **Quick Appointment**: search → doctor details → choose a slot → enter patient details → review → confirm. Serials shown before confirmation are estimates. Confirmation assigns the final doctor/session-local serial.
 - Optional **Save My Details / Register as Patient** appears after booking. Skipping keeps the booking. Registration uses a private, one-use booking token and reuses patient details.
 - Registered patients can book from their saved profile, view appointments/history, cancel an appointment, and update their profile.
@@ -116,6 +154,19 @@ npm test
 ```
 
 Backend tests use an isolated H2 database in PostgreSQL mode and apply the same Flyway migration. To run against a **dedicated empty PostgreSQL test database**, set `TEST_DB_URL`, `TEST_DB_USER`, and `TEST_DB_PASSWORD` before running tests. Tests create test accounts/doctors/bookings: never point these variables at your normal hospital database.
+
+V2 browser tests use Playwright, a local SMTP fixture, and a dedicated PostgreSQL database. Build the backend first, create an empty database such as `harbor_v2_test`, then in `frontend`:
+
+```powershell
+$env:TEST_DB_URL = 'jdbc:postgresql://localhost:5432/harbor_v2_test'
+$env:TEST_DB_USER = 'postgres'
+$env:TEST_DB_PASSWORD = 'postgres'
+npm ci
+npx playwright install chromium
+npm run test:e2e
+```
+
+The runner starts isolated backend/frontend processes (default ports 28080 and 15173), captures SMTP messages locally without Gmail, creates fixtures, exercises the V2 interfaces, and stops its own servers. It restores the test Admin password after its password-change check. Choose free ports with `E2E_BACKEND_PORT`/`E2E_WEB_PORT`; set `E2E_JAVA` if `java` on PATH is not JDK 17+. Use a dedicated test database; fixtures are retained there for inspection.
 
 ## Structure
 

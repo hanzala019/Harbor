@@ -4,17 +4,23 @@ import {api,dateLabel,time,today} from '../api';
 import {Button} from './ui/button';
 import {Dialog,DialogContent,DialogDescription,DialogTitle} from './ui/dialog';
 import {Badge,ErrorBox} from './common';
+import {SearchSelect} from './SearchSelect';
 
 const weekdays=['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
 type Hours={startsAt:string;endsAt:string};
 type Day={weekday:number;enabled:boolean;ranges:Hours[]};
 type Preview={sessions:{date:string;startsAt:string;endsAt:string;status:string}[];toCreate:number;existing:number;conflicts:number};
+export type SchedulePattern={id?:number;name:string;minutes:number;days:{weekday:number;ranges:Hours[]}[]};
 
-export function WeeklyScheduleDialog({doctorId,doctorName,initialDate,onSaved}:{doctorId:number;doctorName:string;initialDate:string;onSaved:(created:number)=>Promise<void>}){
+export function WeeklyScheduleDialog({doctorId,doctorName,initialDate,onSaved,pattern,onPatternUsed}:{doctorId:number;doctorName:string;initialDate:string;onSaved:(created:number)=>Promise<void>;pattern?:SchedulePattern|null;onPatternUsed?:()=>void}){
   const [open,setOpen]=useState(false),[from,setFrom]=useState(initialDate<today()?today():initialDate),[to,setTo]=useState(today(90)),[minutes,setMinutes]=useState(20);
   const [days,setDays]=useState<Day[]>(weekdays.map((_,i)=>({weekday:i+1,enabled:i<5,ranges:[{startsAt:'09:00',endsAt:'17:00'}]})));
   const [preview,setPreview]=useState<Preview|null>(null),[error,setError]=useState(''),[busy,setBusy]=useState(false),[saving,setSaving]=useState(false);
   const formId=useId(),previewSection=useRef<HTMLElement>(null);
+  const [templates,setTemplates]=useState<SchedulePattern[]>([]),[templateId,setTemplateId]=useState(''),[templateName,setTemplateName]=useState('');
+  const applyPattern=(p:SchedulePattern)=>{setDays(weekdays.map((_,i)=>({weekday:i+1,enabled:p.days.some(d=>d.weekday===i+1),ranges:p.days.find(d=>d.weekday===i+1)?.ranges.map(r=>({...r}))||[{startsAt:'09:00',endsAt:'17:00'}]})));setMinutes(p.minutes);setPreview(null);setError('');};
+  useEffect(()=>{if(open)api<SchedulePattern[]>(`/staff/templates?doctorId=${doctorId}`).then(setTemplates).catch(e=>setError(e.message));},[open,doctorId]);
+  useEffect(()=>{if(pattern){applyPattern(pattern);setOpen(true);onPatternUsed?.();}},[pattern]);
   useEffect(()=>{if(preview)previewSection.current?.scrollIntoView({behavior:'smooth',block:'start'});},[preview]);
   const invalidate=()=>{setPreview(null);setError('');};
   const changeDay=(index:number,update:Partial<Day>)=>{invalidate();setDays(days.map((d,i)=>i===index?{...d,...update}:d));};
@@ -36,6 +42,8 @@ export function WeeklyScheduleDialog({doctorId,doctorName,initialDate,onSaved}:{
           catch(err){setError((err as Error).message);}finally{setBusy(false);}
         }}>
           <fieldset disabled={busy} className="space-y-5">
+            <div className="grid gap-3 sm:grid-cols-2"><label>Saved template<SearchSelect label="Saved template" value={templateId} options={[{value:'',label:'Choose a saved template'},...templates.map(t=>({value:String(t.id),label:t.name}))]} onChange={id=>{setTemplateId(id);const p=templates.find(t=>String(t.id)===id);if(p)applyPattern(p);}}/></label><label>Save these hours as a template<input placeholder="Template name" maxLength={150} value={templateName} onChange={e=>setTemplateName(e.target.value)}/></label></div>
+            <div className="flex flex-wrap gap-2"><Button type="button" variant="outline" size="sm" disabled={!templateName.trim()||!days.some(d=>d.enabled)} onClick={async()=>{setBusy(true);try{const t=await api<SchedulePattern>('/staff/templates','POST',{...payload(),name:templateName});setTemplates([...templates,t]);setTemplateId(String(t.id));setTemplateName('');}catch(e){setError((e as Error).message);}finally{setBusy(false);}}}>Save template</Button><Button type="button" variant="ghost" size="sm" disabled={!templateId} onClick={async()=>{setBusy(true);try{await api(`/staff/templates/${templateId}`,'DELETE');setTemplates(templates.filter(t=>String(t.id)!==templateId));setTemplateId('');}catch(e){setError((e as Error).message);}finally{setBusy(false);}}}>Delete selected template</Button></div>
             <div className="grid gap-4 sm:grid-cols-3">
               <label>From date<input required type="date" min={today()} value={from} onChange={e=>{invalidate();setFrom(e.target.value);if(e.target.value>to)setTo(e.target.value);}}/></label>
               <label>Through date<input required type="date" min={from} value={to} onChange={e=>{invalidate();setTo(e.target.value);}}/></label>

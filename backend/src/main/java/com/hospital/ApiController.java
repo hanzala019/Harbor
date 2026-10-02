@@ -20,8 +20,24 @@ public class ApiController {
     public record Claim(@NotNull Long appointmentId,@NotBlank String claimToken,@Size(min=10,max=72) @NotBlank String password) {}
     public record Status(@NotBlank String status) {}
     public record Availability(boolean available) {}
-    public record Destination(Long targetId) {}
+    public record Destination(Long targetId,List<Long> appointmentIds) {}
+    public record GuestSecret(@NotBlank String token) {}
     @GetMapping("/health") Map<String,String> health(){return Map.of("status","ok");}
+    @GetMapping("/config") Object config(){return service.config();}
+    @PostMapping("/guest/view") Object guestView(@Valid @RequestBody GuestSecret input){return service.guestView(input.token);}
+    @PostMapping("/guest/cancel") Object guestCancel(@Valid @RequestBody GuestSecret input){return service.guestCancel(input.token);}
+    @PutMapping("/me/password") void password(@Valid @RequestBody PasswordChange input){service.changePassword(input);}
+    @PatchMapping("/admin/accounts/{id}") Object account(@PathVariable Long id,@Valid @RequestBody AccountUpdate input){return service.manageAccount(id,input);}
+    @GetMapping("/staff/audit") Object audit(@RequestParam LocalDate from,@RequestParam LocalDate to,@RequestParam(defaultValue="") String search){return service.auditHistory(from,to,search);}
+    @GetMapping("/staff/mail") Object mail(){return service.mailStatus();}
+    @PostMapping("/staff/appointments/{id}/resend") void resend(@PathVariable Long id){service.resendConfirmation(id);}
+    @DeleteMapping("/staff/appointments/{id}/guest-links") void revokeGuest(@PathVariable Long id){service.revokeGuestAccess(id);}
+    @PostMapping("/staff/appointments/check-duplicate") Object duplicate(@Valid @RequestBody DuplicateInput input){return service.checkDuplicate(input);}
+    @GetMapping("/staff/schedules/week") Object week(@RequestParam Long doctorId,@RequestParam LocalDate from){return service.week(doctorId,from);}
+    @GetMapping("/staff/templates") Object templates(@RequestParam Long doctorId){return service.templates(doctorId);}
+    @PostMapping("/staff/templates") Object template(@Valid @RequestBody TemplateInput input){return service.saveTemplate(input);}
+    @DeleteMapping("/staff/templates/{id}") void templateDelete(@PathVariable Long id){service.deleteTemplate(id);}
+    @GetMapping("/staff/schedules/copy-week") Object copyWeek(@RequestParam Long doctorId,@RequestParam LocalDate from){return service.copyWeek(doctorId,from);}
     @PostMapping("/auth/login") Object login(@Valid @RequestBody Login input){return service.login(input.email,input.password);}
     @PostMapping("/auth/register") Object register(@Valid @RequestBody Registration input){return service.register(input);}
     @PostMapping("/auth/claim") Object claim(@Valid @RequestBody Claim input){return service.claim(input.appointmentId,input.claimToken,input.password);}
@@ -46,7 +62,7 @@ public class ApiController {
     @GetMapping("/staff/schedules/{id}/affected") Object affected(@PathVariable Long id){return service.affected(id);}
     @PatchMapping("/staff/schedules/{id}/availability") Object availability(@PathVariable Long id,@RequestBody Availability input){return service.availability(id,input.available);}
     @PostMapping("/staff/schedules/{id}/notify") void notify(@PathVariable Long id,@RequestBody Destination input){service.notifyAffected(id,input.targetId);}
-    @PostMapping("/staff/schedules/{id}/transfer") Object transfer(@PathVariable Long id,@RequestBody Destination input){if(input.targetId==null)throw fail(org.springframework.http.HttpStatus.BAD_REQUEST,"Choose a destination session");return service.transfer(id,input.targetId);}
+    @PostMapping("/staff/schedules/{id}/transfer") Object transfer(@PathVariable Long id,@RequestBody Destination input){if(input.targetId==null)throw fail(org.springframework.http.HttpStatus.BAD_REQUEST,"Choose a destination session");return service.transferSelected(id,input.targetId,input.appointmentIds);}
     @GetMapping("/admin/accounts") Object accounts(@RequestParam String role){return service.accounts(role);}
     @PostMapping("/admin/receptionists") Object receptionist(@Valid @RequestBody Registration input){return service.receptionist(input);}
     @PutMapping("/admin/permissions") Object permission(@Valid @RequestBody PermissionInput input){return service.permission(input);}

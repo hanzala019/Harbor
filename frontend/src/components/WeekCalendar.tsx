@@ -1,0 +1,12 @@
+import {useEffect,useState} from 'react';
+import {api,dateLabel,time} from '../api';
+import type {ScheduleView} from '../types';
+import {Button} from './ui/button';
+import {ErrorBox} from './common';
+import type {SchedulePattern} from './WeeklyScheduleDialog';
+export function shiftDate(date:string,days:number){const d=new Date(date+'T12:00:00Z');d.setUTCDate(d.getUTCDate()+days);return d.toISOString().slice(0,10);}
+export function WeekCalendar({doctorId,date,onDate,onSession,onCopy,canEdit}:{doctorId:number;date:string;onDate:(date:string)=>void;onSession:(session:ScheduleView)=>void;onCopy:(pattern:SchedulePattern)=>void;canEdit:boolean}){
+  const day=new Date(date+'T12:00:00Z').getUTCDay(),from=shiftDate(date,-((day+6)%7));const [rows,setRows]=useState<ScheduleView[]>([]),[error,setError]=useState('');
+  useEffect(()=>{let live=true;api<ScheduleView[]>(`/staff/schedules/week?doctorId=${doctorId}&from=${from}`).then(data=>{if(live)setRows(data);}).catch(e=>{if(live)setError(e.message);});return()=>{live=false;};},[doctorId,from]);
+  return <section className="card mb-5"><div className="flex flex-wrap justify-between items-center gap-2"><h2>Week calendar</h2><div className="flex flex-wrap gap-2"><Button variant="outline" size="sm" onClick={()=>onDate(shiftDate(from,-7))}>← Previous week</Button><Button variant="outline" size="sm" onClick={()=>onDate(shiftDate(from,7))}>Next week →</Button>{canEdit&&<Button variant="outline" size="sm" onClick={async()=>{try{onCopy(await api<SchedulePattern>(`/staff/schedules/copy-week?doctorId=${doctorId}&from=${from}`));}catch(e){setError((e as Error).message);}}}>Copy this week</Button>}</div></div><ErrorBox message={error}/><div className="grid gap-2 mt-5 sm:grid-cols-2 xl:grid-cols-7">{Array.from({length:7},(_,i)=>shiftDate(from,i)).map(d=><div key={d} className={'min-w-0 rounded-lg border p-2 '+(d===date?'border-primary bg-teal-50':'bg-slate-50')}><button className="w-full text-left text-xs font-bold mb-3" onClick={()=>onDate(d)}>{dateLabel(d)}</button>{rows.filter(s=>s.schedule.date===d).map(s=><button key={s.schedule.id} className={'block w-full text-left rounded border p-2 mb-2 text-xs '+(s.schedule.available?'bg-white':'bg-red-50 text-red-700')} onClick={()=>onSession(s)}><strong>{time(s.schedule.startsAt)}–{time(s.schedule.endsAt)}</strong><span className="block mt-1">{s.schedule.available?`${s.appointmentCount} bookings`:'Unavailable'}</span></button>)}{!rows.some(s=>s.schedule.date===d)&&<p className="text-xs text-slate-500">No sessions</p>}</div>)}</div></section>;
+}

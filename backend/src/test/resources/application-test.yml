@@ -4,6 +4,7 @@ spring:
     username: ${TEST_DB_USER:sa}
     password: ${TEST_DB_PASSWORD:}
 app:
+  time-zone: Asia/Dhaka
   admin-email: integration-admin@hospital.test
   admin-password: integration-admin-password
   seed: false

@@ -1,7 +1,7 @@
 # Repository context
 
 - Read `requirements.md` for product rules and `README.md` for native Windows/Docker setup. The workspace path does not imply a Python backend.
-- V1 is the completed baseline; `ROADMAP.md` tracks all 18 agreed V2 enhancements. Treat unchecked items as pending and retain V1 product invariants when implementing them.
+- V1 is the baseline; `ROADMAP.md` tracks all 18 implemented V2 enhancements. Retain V1 invariants. Docker runtime verification passed on Docker Desktop's WSL2 Linux engine: production builds, nginx/browser workflows, Mailpit delivery, migrations, and database persistence. Use an isolated Compose project and test environment for future Docker verification to protect existing data and avoid sending test email through real SMTP accounts.
 - `backend` is Spring Boot/JPA/PostgreSQL 17; `frontend` is React/Vite with shadcn-style Radix components, Tailwind, React Router, and React Hook Form/Zod. Java bytecode targets 17 and was verified on Java 19.0.2. On this Windows machine, `JAVA_HOME` originally pointed to Java 11 despite `java` resolving to 19; set it to `C:\Program Files\Java\jdk-19` for Maven.
 - From root on Windows: `powershell -ExecutionPolicy Bypass -File .\backend\mvnw.ps1 verify`; focused test: append `'-Dtest=HospitalIntegrationTest' test` instead of `verify`. On Linux/macOS use `sh backend/mvnw verify`. The scripts bootstrap Maven 3.9.9 with checksum verification.
 - In `frontend`: `npm ci`, `npm run build` (TypeScript then Vite), `npm test` (queue tests). Vite proxies `/api` to localhost:8080 (override with `API_PROXY`); Docker nginx proxies it to `backend:8080` and provides SPA fallback. Port 8080 was occupied on this machine; native testing used backend `PORT=18080` and frontend `API_PROXY=http://localhost:18080`.
@@ -10,6 +10,9 @@
 - JPA entities are nested in `Models`; `HospitalService` owns transactional business rules using `EntityManager`. Booking/queue mutations lock schedule rows; keep stable ID lock ordering for transfers and refresh locked state before validation. Auth uses database-hashed, expiring bearer tokens, not cookies; never return raw account entities/password hashes or guest claim hashes.
 - Weekly scheduling expands weekday/time-range rules into dated sessions for a bounded date window; preview and create use the same validation. Creation locks the doctor like single-session creation, skips identical sessions without changing availability, and rejects overlapping batches atomically. Bulk doctor assignments upsert under a receptionist-account lock and apply one permission set to the complete selection.
 - Emails enter `mail_jobs` in the booking transaction; `MailWorker` sends committed outbox jobs with retries. `MAIL_ENABLED=false` queues without delivery. Compose's optional `mail` profile supplies Mailpit; its inbox is localhost:8025.
+- V2 uses forward migrations for account enablement, guest links, templates, audits, and original slot history. Guest management tokens are hashed/expiring and sent in email URL fragments; API mail status never returns message bodies. Preserve original slot position when freeing a cancelled slot.
+- `start-local.ps1` selects matching available ports, sets `PUBLIC_URL`, and owns only the processes it starts; `-CheckOnly` and `-SmokeTest` verify prerequisites/startup. `HOSPITAL_TIMEZONE` controls booking/date calculations; Compose uses `DOCKER_PUBLIC_URL` for private email links.
+- `frontend` `npm run test:e2e` requires a dedicated PostgreSQL `TEST_DB_URL/USER/PASSWORD`, a built backend jar, and Playwright Chromium. It starts its own servers and local SMTP fixture, mutates test accounts/appointments, and restores its test Admin password.
 
 ## Product invariants
 
