@@ -27,14 +27,20 @@ public class HospitalService {
     final ObjectMapper json;
     @Value("${app.time-zone}") String timeZone;
     @Value("${app.public-url}") String publicUrl;
+    @Value("${app.hospital-address:}") String hospitalAddress;
+    @Value("${app.reception-phone:}") String receptionPhone;
+    @Value("${app.directions-url:}") String directionsUrl;
+    @Value("${app.visit-instructions:Bring your appointment confirmation and relevant medical records. Check in at reception before going to your consultation room.}") String visitInstructions;
     public HospitalService(PasswordEncoder encoder,ObjectMapper json) { this.encoder = encoder;this.json=json; }
     LocalDate today() {return LocalDate.now(ZoneId.of(timeZone));}
     LocalDateTime now() {return LocalDateTime.now(ZoneId.of(timeZone));}
-    public Map<String,Object> config(){return Map.of("timeZone",timeZone,"today",today(),"time",now().toLocalTime());}
+    public Map<String,Object> config(){return Map.of("timeZone",timeZone,"today",today(),"time",now().toLocalTime(),"hospitalAddress",hospitalAddress,"receptionPhone",receptionPhone,"directionsUrl",directionsUrl,"visitInstructions",visitInstructions);}
     public record Patient(@NotBlank @Size(max=150) String name, @NotBlank @Email @Size(max=200) String email,
         @NotNull @Min(0) @Max(130) Integer age, @NotBlank @Size(max=40) String gender, @NotBlank @Size(max=40) String phone) {}
     public record Registration(@jakarta.validation.Valid @NotNull Patient patient, @NotBlank @Size(min=10,max=72) String password) {}
-    public record Booking(@NotNull Long scheduleId, @NotNull @Min(0) Integer slotIndex, @jakarta.validation.Valid Patient patient,boolean allowDuplicate) {}
+    public record Booking(@NotNull Long scheduleId, @NotNull @Min(0) Integer slotIndex, @jakarta.validation.Valid Patient patient,boolean allowDuplicate,Long patientAccountId) {}
+    public record RescheduleInput(@NotNull Long scheduleId,@NotNull @Min(0) Integer slotIndex) {}
+    public record GuestReschedule(@NotBlank String token,@NotNull Long scheduleId,@NotNull @Min(0) Integer slotIndex) {}
     public record DoctorInput(@NotBlank @Size(max=150) String name, @NotBlank @Size(max=150) String specialty,
         @NotBlank @Size(max=150) String department, @NotBlank @Size(max=100) String room, @Size(max=4000) String biography) {}
     public record ScheduleInput(@NotNull Long doctorId, @NotNull LocalDate date, @NotNull LocalTime startsAt,
@@ -127,8 +133,21 @@ public class HospitalService {
     public List<ScheduleView> schedules(Long doctorId,LocalDate date) {
         return em.createQuery("from Schedule where doctorId=:d and date=:date order by startsAt",Schedule.class).setParameter("d",doctorId).setParameter("date",date).getResultList().stream().map(this::scheduleView).toList();
     }
+    public List<ScheduleView> availabilitySearch(Long doctorId,LocalDate from,LocalDate to) {
+        if(to.isBefore(from)||to.isAfter(from.plusDays(365)))throw fail(HttpStatus.BAD_REQUEST,"Choose a date window of no more than 366 days");
+        var query=em.createQuery("from Schedule where available=true and date>=:from and date<=:to"+(doctorId==null?"":" and doctorId=:doctor")+" order by date,startsAt,doctorId",Schedule.class)
+            .setParameter("from",from.isBefore(today())?today():from).setParameter("to",to);
+        if(doctorId!=null)query.setParameter("doctor",doctorId);
+        List<Schedule> sessions=query.getResultList();if(sessions.isEmpty())return List.of();
+        Map<Long,List<Appointment>> bookings=new HashMap<>();
+        em.createQuery("from Appointment where scheduleId in :ids",Appointment.class).setParameter("ids",sessions.stream().map(s->s.id).toList()).getResultList().forEach(a->bookings.computeIfAbsent(a.scheduleId,k->new ArrayList<>()).add(a));
+        return sessions.stream().map(s->scheduleView(s,bookings.getOrDefault(s.id,List.of()))).filter(s->!s.slots.isEmpty()).toList();
+    }
     ScheduleView scheduleView(Schedule s) {
-        List<Appointment> apps=appointments(s.id);Set<Integer> occupied=new HashSet<>();apps.forEach(a->{if(a.slotIndex!=null)occupied.add(a.slotIndex);});
+        return scheduleView(s,appointments(s.id));
+    }
+    ScheduleView scheduleView(Schedule s,List<Appointment> apps) {
+        Set<Integer> occupied=new HashSet<>();apps.forEach(a->{if(a.slotIndex!=null)occupied.add(a.slotIndex);});
         List<Slot> slots=new ArrayList<>();int next=apps.stream().mapToInt(a->a.serial).max().orElse(0)+1;
         if(s.available && !s.date.isBefore(today())) for(int i=0;i<capacity(s);i++) {
             LocalTime time=s.startsAt.plusMinutes((long)i*s.minutes);
@@ -160,15 +179,21 @@ public class HospitalService {
         List<Appointment> existing=appointments(s.id);
         if(existing.stream().anyMatch(a->Objects.equals(a.slotIndex,b.slotIndex))) throw fail(HttpStatus.CONFLICT,"Someone has already booked this slot. Choose another time.");
         Account user=optional();Patient p=b.patient;
+        if(user!=null&&Set.of("ADMIN","RECEPTIONIST").contains(user.role))access(s.doctorId,"");
+        Account bookedAccount=user!=null&&user.role.equals("PATIENT")?user:null;
+        if(b.patientAccountId!=null){
+            if(user==null||!Set.of("ADMIN","RECEPTIONIST").contains(user.role))throw fail(HttpStatus.FORBIDDEN,"Staff access required to book for another account");
+            bookedAccount=staffPatient(b.patientAccountId);p=new Patient(bookedAccount.name,bookedAccount.email,bookedAccount.age,bookedAccount.gender,bookedAccount.phone);
+        }
         if(user!=null && user.role.equals("PATIENT")) p=new Patient(user.name,user.email,user.age,user.gender,user.phone);
         if(p==null)throw fail(HttpStatus.BAD_REQUEST,"Patient details are required");
-        boolean duplicate=duplicateCount(s,p,user)>0;
+        boolean duplicate=duplicateCount(s,p,bookedAccount)>0;
         if(duplicate){
             boolean staff=user!=null&&Set.of("ADMIN","RECEPTIONIST").contains(user.role);
             if(!staff||!b.allowDuplicate)throw fail(HttpStatus.CONFLICT,"This patient already has an active appointment with this doctor on this date. Authorized staff may explicitly confirm an additional booking.");
             access(s.doctorId,"");
         }
-        Appointment a=new Appointment();a.scheduleId=s.id;a.accountId=user!=null&&user.role.equals("PATIENT")?user.id:null;
+        Appointment a=new Appointment();a.scheduleId=s.id;a.accountId=bookedAccount==null?null:bookedAccount.id;
         a.serial=existing.stream().mapToInt(x->x.serial).max().orElse(0)+1;a.slotIndex=b.slotIndex;a.originalSlotIndex=b.slotIndex;a.name=p.name;a.email=p.email.trim().toLowerCase(Locale.ROOT);a.age=p.age;a.gender=p.gender;a.phone=p.phone;a.status="CONFIRMED";a.createdAt=Instant.now();
         String secret=random();a.claimHash=a.accountId==null?hash(secret):null;em.persist(a);emailAppointment(a,"Appointment confirmed");
         audit(duplicate?"APPOINTMENT_BOOKED_DUPLICATE_OVERRIDE":"APPOINTMENT_BOOKED","Appointment",a.id,s.doctorId,"Serial "+a.serial);
@@ -254,6 +279,33 @@ public class HospitalService {
         if(!Set.of("VISITED","NO_SHOW","CANCELLED","WAITING").contains(status)||!active(a))throw fail(HttpStatus.BAD_REQUEST,"Invalid appointment status transition");
         a.status=status;if(status.equals("CANCELLED"))a.slotIndex=null;audit("APPOINTMENT_STATUS_CHANGED","Appointment",a.id,s.doctorId,status);return view(a);
     }
+    public AppointmentView patientReschedule(Long id,RescheduleInput input){
+        Account user=current();Appointment a=find(Appointment.class,id);
+        if(!user.role.equals("PATIENT")||!Objects.equals(a.accountId,user.id))throw fail(HttpStatus.FORBIDDEN,"This appointment is not yours");
+        return rescheduleAppointment(a,input.scheduleId,input.slotIndex,null);
+    }
+    public AppointmentView guestReschedule(GuestReschedule input){GuestLink link=guestLink(input.token);return rescheduleAppointment(find(Appointment.class,link.appointmentId),input.scheduleId,input.slotIndex,link);}
+    AppointmentView rescheduleAppointment(Appointment a,Long destination,int slot,GuestLink link){
+        Long sourceId=a.scheduleId;lockSchedule(Math.min(sourceId,destination));if(!sourceId.equals(destination))lockSchedule(Math.max(sourceId,destination));
+        em.refresh(a,LockModeType.PESSIMISTIC_WRITE);
+        if(!a.scheduleId.equals(sourceId))throw fail(HttpStatus.CONFLICT,"This appointment changed. Refresh and try again; no further changes were made");
+        if(link!=null){em.refresh(link);if(Boolean.TRUE.equals(link.revoked)||!link.expiresAt.isAfter(Instant.now())||a.accountId!=null)throw fail(HttpStatus.NOT_FOUND,"This private appointment link is invalid, expired, or revoked");}
+        else if(!Objects.equals(a.accountId,current().id))throw fail(HttpStatus.FORBIDDEN,"This appointment is not yours");
+        AppointmentView before=view(a);Schedule target=find(Schedule.class,destination);
+        if(!active(a)||!before.consultationAt.isAfter(Instant.now()))throw fail(HttpStatus.CONFLICT,"Only active future appointments can be changed");
+        if(!target.doctorId.equals(before.doctorId))throw fail(HttpStatus.BAD_REQUEST,"Choose another time with the same doctor");
+        if(destination.equals(sourceId)&&Objects.equals(a.slotIndex,slot))throw fail(HttpStatus.BAD_REQUEST,"Choose a different appointment time");
+        if(!target.available||slot<0||slot>=capacity(target)||!LocalDateTime.of(target.date,target.startsAt.plusMinutes((long)slot*target.minutes)).isAfter(now()))throw fail(HttpStatus.CONFLICT,"This slot is no longer available. Your original appointment is unchanged");
+        List<Appointment> existing=appointments(destination);
+        if(existing.stream().anyMatch(other->!other.id.equals(a.id)&&Objects.equals(other.slotIndex,slot)))throw fail(HttpStatus.CONFLICT,"Someone has booked this slot. Your original appointment is unchanged");
+        boolean duplicate=em.createQuery("select other from Appointment other, Schedule s where other.scheduleId=s.id and s.doctorId=:doctor and s.date=:date",Appointment.class).setParameter("doctor",target.doctorId).setParameter("date",target.date).getResultList().stream().filter(other->!other.id.equals(a.id)&&active(other)).anyMatch(other->a.accountId!=null?Objects.equals(other.accountId,a.accountId):other.email.equalsIgnoreCase(a.email)&&other.phone.replaceAll("\\D","").equals(a.phone.replaceAll("\\D","")));
+        if(duplicate)throw fail(HttpStatus.CONFLICT,"You already have an active appointment with this doctor on that date. Your original appointment is unchanged");
+        if(!sourceId.equals(destination))a.serial=existing.stream().mapToInt(other->other.serial).max().orElse(0)+1;
+        a.scheduleId=destination;a.slotIndex=slot;a.originalSlotIndex=slot;a.status="RESCHEDULED";
+        emailAppointment(a,"Appointment rescheduled");AppointmentView after=view(a);
+        audit(link==null?"PATIENT_APPOINTMENT_RESCHEDULED":"GUEST_APPOINTMENT_RESCHEDULED","Appointment",a.id,target.doctorId,"From session "+sourceId+" "+before.date+" "+before.time+" serial "+before.serial+" to session "+destination+" "+after.date+" "+after.time+" serial "+after.serial);
+        return after;
+    }
     public List<AppointmentView> affected(Long id) {Schedule s=find(Schedule.class,id);access(s.doctorId,"");return appointments(id).stream().filter(HospitalService::active).map(this::view).toList();}
     public Schedule availability(Long id,boolean available) {
         Schedule s=lockSchedule(id);access(s.doctorId,"availability");s.available=available;
@@ -284,6 +336,25 @@ public class HospitalService {
     }
     public List<Map<String,Object>> accounts(String role) {admin();return em.createQuery("from Account where role=:r order by name",Account.class).setParameter("r",role).getResultList().stream().map(this::profile).toList();}
     public Map<String,Object> receptionist(Registration r) {admin();Account a=create(r.patient,r.password,"RECEPTIONIST");audit("RECEPTIONIST_CREATED","Account",a.id,null,"Receptionist created");return profile(a);}
+    Account staffPatient(Long id){
+        Account actor=current(),patient=find(Account.class,id);if(!patient.role.equals("PATIENT"))throw fail(HttpStatus.BAD_REQUEST,"Select a Patient account");
+        if(actor.role.equals("ADMIN"))return patient;
+        if(!actor.role.equals("RECEPTIONIST"))throw fail(HttpStatus.FORBIDDEN,"Staff access required");
+        Set<Long> doctors=new HashSet<>(staffDoctors().stream().map(d->d.id).toList());
+        boolean known=em.createQuery("select s.doctorId from Appointment a, Schedule s where a.scheduleId=s.id and a.accountId=:id",Long.class).setParameter("id",id).getResultList().stream().anyMatch(doctors::contains);
+        if(!known)throw fail(HttpStatus.FORBIDDEN,"This patient is not in your assigned-doctor history");return patient;
+    }
+    public record PatientChoice(Long accountId,String name,String email,Integer age,String gender,String phone) {}
+    public List<PatientChoice> patientLookup(String search){
+        Account actor=current();String term=search.trim().toLowerCase(Locale.ROOT);if(term.length()<2)return List.of();if(term.length()>100)throw fail(HttpStatus.BAD_REQUEST,"Search must be at most 100 characters");
+        List<PatientChoice> choices=new ArrayList<>();
+        if(actor.role.equals("ADMIN"))em.createQuery("from Account where role='PATIENT' and (lower(name) like :term or lower(email) like :term or phone like :term) order by name",Account.class).setParameter("term","%"+term+"%").setMaxResults(20).getResultList().forEach(a->choices.add(new PatientChoice(a.id,a.name,a.email,a.age,a.gender,a.phone)));
+        Set<Long> doctors=new HashSet<>(staffDoctors().stream().map(d->d.id).toList());if(doctors.isEmpty())return choices;
+        List<Appointment> known=em.createQuery("select a from Appointment a, Schedule s where a.scheduleId=s.id and s.doctorId in :doctors and (lower(a.name) like :term or lower(a.email) like :term or a.phone like :term) order by a.createdAt desc",Appointment.class).setParameter("doctors",doctors).setParameter("term","%"+term+"%").setMaxResults(100).getResultList();
+        Set<String> seen=new HashSet<>();choices.forEach(p->seen.add("account:"+p.accountId));
+        for(Appointment a:known){String key=a.accountId==null?a.email+":"+a.phone:"account:"+a.accountId;if(seen.add(key)){Account account=a.accountId==null?null:find(Account.class,a.accountId);choices.add(account==null?new PatientChoice(null,a.name,a.email,a.age,a.gender,a.phone):new PatientChoice(account.id,account.name,account.email,account.age,account.gender,account.phone));}if(choices.size()>=20)break;}
+        return choices;
+    }
     public Permission permission(PermissionInput input) {
         admin();Account account=find(Account.class,input.accountId);em.refresh(account,LockModeType.PESSIMISTIC_WRITE);
         if(!account.role.equals("RECEPTIONIST"))throw fail(HttpStatus.BAD_REQUEST,"Select a receptionist");find(Doctor.class,input.doctorId);
@@ -303,21 +374,43 @@ public class HospitalService {
     MailJob enqueue(String to,String subject,String body) {MailJob j=new MailJob();j.recipient=to;j.subject=subject;j.body=body;j.sent=false;j.attempts=0;j.createdAt=Instant.now();em.persist(j);return j;}
     void emailAppointment(Appointment a,String subject) {
         AppointmentView v=view(a);String link=a.accountId==null?"\nManage this appointment privately: "+issueGuestLink(a):"";
-        MailJob job=enqueue(a.email,subject,"Hello "+a.name+",\n"+subject+".\nStatus: "+a.status+"\nDoctor: "+v.doctor+"\nDate: "+v.date+"\nEstimated consultation: "+v.time+"\nPlease arrive: "+v.arrivalTime+"\nTimezone: "+timeZone+"\nSerial: "+a.serial+"\nRoom: "+v.room+link+"\nThank you for choosing Harbor Hospital.");job.appointmentId=a.id;
+        String visit="\nPlan your visit: "+visitInstructions+(hospitalAddress.isBlank()?"":"\nAddress: "+hospitalAddress)+(receptionPhone.isBlank()?"":"\nReception: "+receptionPhone)+(directionsUrl.isBlank()?"":"\nDirections: "+directionsUrl);
+        MailJob job=enqueue(a.email,subject,"Hello "+a.name+",\n"+subject+".\nStatus: "+a.status+"\nDoctor: "+v.doctor+"\nDate: "+v.date+"\nEstimated consultation: "+v.time+"\nPlease arrive: "+v.arrivalTime+"\nTimezone: "+timeZone+"\nSerial: "+a.serial+"\nRoom: "+v.room+link+visit+"\nThank you for choosing Harbor Hospital.");job.appointmentId=a.id;
     }
     long duplicateCount(Schedule s,Patient p,Account account){return em.createQuery("select a from Appointment a, Schedule s where a.scheduleId=s.id and s.doctorId=:d and s.date=:date",Appointment.class).setParameter("d",s.doctorId).setParameter("date",s.date).getResultList().stream().filter(HospitalService::active).filter(a->account!=null&&account.role.equals("PATIENT")?Objects.equals(a.accountId,account.id):a.email.equalsIgnoreCase(p.email.trim())&&a.phone.replaceAll("\\D","").equals(p.phone.replaceAll("\\D",""))).count();}
-    public record DuplicateInput(@NotNull Long scheduleId,@NotBlank @Email String email,@NotBlank String phone) {}
-    public Map<String,Long> checkDuplicate(DuplicateInput input){Schedule s=find(Schedule.class,input.scheduleId);access(s.doctorId,"");return Map.of("matches",duplicateCount(s,new Patient("Check",input.email,0,"Other",input.phone),null));}
+    public record DuplicateInput(@NotNull Long scheduleId,@NotBlank @Email String email,@NotBlank String phone,Long patientAccountId) {}
+    public Map<String,Long> checkDuplicate(DuplicateInput input){Schedule s=find(Schedule.class,input.scheduleId);access(s.doctorId,"");return Map.of("matches",duplicateCount(s,new Patient("Check",input.email,0,"Other",input.phone),input.patientAccountId==null?null:staffPatient(input.patientAccountId)));}
     void audit(String action,String type,Long id,Long doctor,String details){Account actor=optional();AuditEvent e=new AuditEvent();e.actorId=actor==null?null:actor.id;e.actorName=actor==null?"Guest":actor.name;e.action=action;e.entityType=type;e.entityId=id;e.doctorId=doctor;e.details=details;e.occurredAt=Instant.now();em.persist(e);}
     public List<AuditEvent> auditHistory(LocalDate from,LocalDate to,String search){
         Account actor=current();Set<Long> ids=new HashSet<>(staffDoctors().stream().map(d->d.id).toList());
         return em.createQuery("from AuditEvent where occurredAt>=:from and occurredAt<:to order by occurredAt desc",AuditEvent.class).setParameter("from",from.atStartOfDay(ZoneId.of(timeZone)).toInstant()).setParameter("to",to.plusDays(1).atStartOfDay(ZoneId.of(timeZone)).toInstant()).getResultList().stream().filter(e->actor.role.equals("ADMIN")||ids.contains(e.doctorId)).filter(e->(e.actorName+" "+e.action+" "+e.details+" "+e.entityType).toLowerCase(Locale.ROOT).contains(search.toLowerCase(Locale.ROOT))).toList();
     }
     public record PasswordChange(@NotBlank String currentPassword,@NotBlank @Size(min=10,max=72) String newPassword) {}
+    public record ForgotPassword(@NotBlank @Email @Size(max=200) String email) {}
+    public record ResetPassword(@NotBlank @Size(max=200) String token,@NotBlank @Size(min=10,max=72) String newPassword) {}
+    public Map<String,String> forgotPassword(ForgotPassword input){
+        Account a=em.createQuery("from Account where email=:email",Account.class).setParameter("email",input.email.trim().toLowerCase(Locale.ROOT)).getResultStream().findFirst().orElse(null);
+        if(a!=null){em.refresh(a,LockModeType.PESSIMISTIC_WRITE);if(Boolean.TRUE.equals(a.enabled)){
+            PasswordReset reset=em.find(PasswordReset.class,a.id);if(reset!=null)em.refresh(reset);
+            if(reset==null||reset.createdAt.isBefore(Instant.now().minusSeconds(60))){
+                boolean fresh=reset==null;if(fresh){reset=new PasswordReset();reset.accountId=a.id;}
+                String raw=random();reset.hash=hash(raw);reset.createdAt=Instant.now();reset.expiresAt=reset.createdAt.plus(Duration.ofMinutes(30));reset.used=false;if(fresh)em.persist(reset);
+                enqueue(a.email,"Reset your hospital account password","Hello "+a.name+",\nUse this private link to choose a new password:\n"+publicUrl.replaceAll("/$","")+"/reset-password#"+raw+"\nThis link expires in 30 minutes and can be used once. Requesting a newer link replaces the previous link. If you did not request this, you can ignore this email. Your password has not changed.");
+            }
+        }}
+        return Map.of("message","If an enabled account matches that email, a password reset link will be sent. Check your inbox and spam folder. You can request another link after one minute.");
+    }
+    public void resetPassword(ResetPassword input){
+        PasswordReset reset=em.createQuery("from PasswordReset where hash=:hash",PasswordReset.class).setParameter("hash",hash(input.token)).getResultStream().findFirst().orElseThrow(()->fail(HttpStatus.BAD_REQUEST,"This reset link is invalid or expired. Request a new link"));
+        Account a=find(Account.class,reset.accountId);em.refresh(a,LockModeType.PESSIMISTIC_WRITE);em.refresh(reset);
+        if(!reset.hash.equals(hash(input.token))||Boolean.TRUE.equals(reset.used)||!reset.expiresAt.isAfter(Instant.now())||!Boolean.TRUE.equals(a.enabled))throw fail(HttpStatus.BAD_REQUEST,"This reset link is invalid or expired. Request a new link");
+        a.password=encodePassword(input.newPassword);reset.used=true;revokeTokens(a.id);audit("PASSWORD_RESET","Account",a.id,null,"Password reset using email recovery; all sessions revoked");
+    }
+    void invalidatePasswordReset(Long id){PasswordReset reset=em.find(PasswordReset.class,id);if(reset!=null)reset.used=true;}
     public record AccountUpdate(Boolean enabled,@Size(min=10,max=72) String password,boolean revokeSessions) {}
     void revokeTokens(Long id){em.createQuery("delete from LoginToken where accountId=:id").setParameter("id",id).executeUpdate();}
-    public void changePassword(PasswordChange input){Account a=current();em.refresh(a,LockModeType.PESSIMISTIC_WRITE);if(!encoder.matches(input.currentPassword,a.password))throw fail(HttpStatus.FORBIDDEN,"Current password is incorrect");a.password=encodePassword(input.newPassword);revokeTokens(a.id);audit("PASSWORD_CHANGED","Account",a.id,null,"Password changed; all sessions revoked");}
-    public Map<String,Object> manageAccount(Long id,AccountUpdate input){admin();Account a=find(Account.class,id);em.refresh(a,LockModeType.PESSIMISTIC_WRITE);if(!a.role.equals("RECEPTIONIST"))throw fail(HttpStatus.BAD_REQUEST,"Select a receptionist");if(input.enabled!=null)a.enabled=input.enabled;if(input.password!=null)a.password=encodePassword(input.password);if(input.revokeSessions||input.password!=null||Boolean.FALSE.equals(input.enabled))revokeTokens(a.id);audit("RECEPTIONIST_ACCOUNT_UPDATED","Account",id,null,"Enabled="+a.enabled+"; password reset="+(input.password!=null)+"; session revocation requested="+input.revokeSessions);return profile(a);}
+    public void changePassword(PasswordChange input){Account a=current();em.refresh(a,LockModeType.PESSIMISTIC_WRITE);if(!encoder.matches(input.currentPassword,a.password))throw fail(HttpStatus.FORBIDDEN,"Current password is incorrect");a.password=encodePassword(input.newPassword);invalidatePasswordReset(a.id);revokeTokens(a.id);audit("PASSWORD_CHANGED","Account",a.id,null,"Password changed; all sessions revoked");}
+    public Map<String,Object> manageAccount(Long id,AccountUpdate input){admin();Account a=find(Account.class,id);em.refresh(a,LockModeType.PESSIMISTIC_WRITE);if(!a.role.equals("RECEPTIONIST"))throw fail(HttpStatus.BAD_REQUEST,"Select a receptionist");if(input.enabled!=null)a.enabled=input.enabled;if(input.password!=null)a.password=encodePassword(input.password);if(input.revokeSessions||input.password!=null||Boolean.FALSE.equals(input.enabled))revokeTokens(a.id);if(input.password!=null||Boolean.FALSE.equals(input.enabled))invalidatePasswordReset(a.id);audit("RECEPTIONIST_ACCOUNT_UPDATED","Account",id,null,"Enabled="+a.enabled+"; password reset="+(input.password!=null)+"; session revocation requested="+input.revokeSessions);return profile(a);}
     String issueGuestLink(Appointment a){String raw=random();GuestLink link=new GuestLink();link.appointmentId=a.id;link.hash=hash(raw);link.expiresAt=Instant.now().plus(Duration.ofDays(30));link.revoked=false;em.persist(link);return publicUrl.replaceAll("/$","")+"/guest-appointment#"+raw;}
     GuestLink guestLink(String raw){return em.createQuery("from GuestLink where hash=:hash and revoked=false and expiresAt>:now",GuestLink.class).setParameter("hash",hash(raw)).setParameter("now",Instant.now()).getResultStream().findFirst().orElseThrow(()->fail(HttpStatus.NOT_FOUND,"This private appointment link is invalid, expired, or revoked"));}
     public AppointmentView guestView(String raw){return view(find(Appointment.class,guestLink(raw).appointmentId));}

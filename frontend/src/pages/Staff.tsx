@@ -1,5 +1,6 @@
 import {useEffect,useRef,useState} from 'react';
 import {Check,X} from 'lucide-react';
+import {Link} from 'react-router-dom';
 import {api,active,dateLabel,roundRobin,time,today,hospitalTimeZone} from '../api';
 import type {Appointment,Doctor} from '../types';
 import {Button} from '../components/ui/button';
@@ -30,7 +31,7 @@ export function StaffAppointments(){
   const table=useTable(filtered,[{key:'date',label:'Visit date',value:a=>a.date+' '+a.time},{key:'patient',label:'Patient',value:a=>a.name},{key:'doctor',label:'Doctor',value:a=>a.doctor},{key:'serial',label:'Serial',value:a=>a.serial}],'appointments',tab==='ONGOING');
 
   return <div className="page wide">
-    <span className="eyebrow">RECEPTION DESK</span><h1>Appointments</h1><p className="page-subtitle">Keep each doctor's next patient in view.</p>
+    <div className="flex flex-wrap items-start justify-between gap-4"><div><span className="eyebrow">RECEPTION DESK</span><h1>Appointments</h1><p className="page-subtitle">Keep each doctor's next patient in view.</p></div><Button asChild><Link to="/staff/book">Book for a patient</Link></Button></div>
     <div className="card filter-grid"><label>From<input type="date" value={from} onChange={e=>{setFrom(e.target.value);if(e.target.value>to)setTo(e.target.value);}}/></label><label>To<input type="date" min={from} value={to} onChange={e=>setTo(e.target.value)}/></label><label>Doctor<SearchSelect label="Doctor" value={doctor} onChange={setDoctor} options={[{value:'',label:'All assigned doctors'},...doctors.map(d=>({value:String(d.id),label:d.name}))]}/></label><label>Patient name / phone<input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search patients…"/></label></div>
     <div className="flex flex-wrap gap-2 mt-3">{[['Today',0],['Yesterday',-1],['Tomorrow',1]].map(([name,offset])=><Button key={String(name)} variant="outline" size="sm" onClick={()=>{setFrom(today(Number(offset)));setTo(today(Number(offset)));}}>{name}</Button>)}<Button size="sm" variant="outline" onClick={()=>load()}>Refresh</Button><Button variant="ghost" size="sm" onClick={()=>{setFrom(today());setTo(today());setDoctor('');setSearch('');setTab('ONGOING');setStatus('');}}>Reset filters</Button><label className="checkbox"><input type="checkbox" checked={live} onChange={e=>setLive(e.target.checked)}/>Auto-refresh every 30s</label></div>
     <p className="my-3 text-xs text-slate-500">Last updated: {lastUpdate||'—'} · {hospitalTimeZone}. {tab==='ONGOING'?'Round-robin queue order is preserved across pages.':''}</p>

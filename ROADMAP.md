@@ -1,4 +1,4 @@
-# V1 baseline · V2 implemented
+# V1 baseline · V2 complete · V3 convenience update
 
 ## V1 milestone
 
@@ -27,8 +27,18 @@ All 18 agreed enhancements are implemented. The checks below track features; nat
 - [x] **17. Selective transfers:** staff select the active patients who agreed to move. Their relative order is preserved, unselected patients remain, capacity is checked atomically, and only moved patients get updated notifications.
 - [x] **18. Assignment presets:** View only, Scheduling desk, and Full doctor management presets show their flags and allow individual overrides before an atomic bulk save.
 
+## V3 feature checklist
+
+Commit `b3c98e8` records the completed, Docker-verified V2 baseline. V3 implements the four selected convenience improvements:
+
+- [x] **Next-available discovery and consistent availability filters:** a public, bounded availability search returns only future free slots without patient details; custom-date/Today/Tonight/Tomorrow filtering is consistent. Doctor cards show earliest availability, and booking/change screens provide next-available and available-date navigation.
+- [x] **Patient date/time changes:** registered and private-link guest patients can review and confirm another slot with the same doctor. Stable schedule locks and refreshed appointment state protect ownership, double-booking, active/future status, duplicate rules, and rollback. Successful changes free the source slot, recalculate destination-local serials, email updated details, and audit the original and new visit.
+- [x] **Receptionist booking shortcut:** Appointments prominently links to an assigned-doctor booking page with scoped patient lookup, registered account reuse, guest details, review, and explicit duplicate overrides. Backend scoping applies to both the dedicated staff endpoint and staff use of the public booking endpoint.
+- [x] **Password recovery and visit/contact information:** hashed, single-use, 30-minute email recovery links with per-account cooldown, generic request responses, and session revocation; configurable address, reception phone, directions, and arrival/check-in instructions on the website and in appointment emails. Forward Flyway migration V4 adds recovery storage.
+
 ## Verification and deployment status
 
+- V3 verification passes: all 30 backend integration tests on H2 and a dedicated PostgreSQL 17 database; four frontend tests; native and Docker TypeScript/production builds; and V2/V3 Playwright workflows through Docker nginx with Mailpit. V3 browser checks include availability filtering, guest booking with registration skipped, editable reused patient details, registered/guest rescheduling with a competing-slot failure/retry, receptionist account-linked booking and duplicate override, emailed password recovery/session revocation, visit/contact links, and mobile patient/receptionist layouts. V4 applies successfully to PostgreSQL. Verification uses isolated test databases and local SMTP; normal hospital data and SMTP credentials are untouched.
 - Backend integration checks exercise V1 invariants and V2 guest security, account/session management, duplicate handling, selective transfers, templates, email privacy/resend, audits, timezone instants, and slot-history preservation on H2 and dedicated PostgreSQL 17 databases.
 - Frontend tests cover round-robin ordering, active/past classification, and hospital date calculations. The TypeScript/production build passes.
 - Playwright browser checks cover searchable selectors, presets, sorting/pagination, remembered filters, calendar/templates/copy-week, queue/email controls, actual local SMTP acceptance/resend, guest cancellation, selective transfer/audit, receptionist controls, Admin password change, and mobile layout.

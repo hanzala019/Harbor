@@ -26,6 +26,10 @@ spring:
 app:
   time-zone: ${HOSPITAL_TIMEZONE:UTC}
   public-url: ${PUBLIC_URL:http://localhost:5173}
+  hospital-address: ${HOSPITAL_ADDRESS:}
+  reception-phone: ${RECEPTION_PHONE:}
+  directions-url: ${DIRECTIONS_URL:}
+  visit-instructions: ${VISIT_INSTRUCTIONS:Bring your appointment confirmation and relevant medical records. Check in at reception before going to your consultation room.}
   seed: ${SEED_DEMO:false}
   admin-email: ${ADMIN_EMAIL:admin@hospital.local}
   admin-password: ${ADMIN_PASSWORD:}

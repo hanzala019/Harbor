@@ -26,6 +26,7 @@ public class ApiController {
     @GetMapping("/config") Object config(){return service.config();}
     @PostMapping("/guest/view") Object guestView(@Valid @RequestBody GuestSecret input){return service.guestView(input.token);}
     @PostMapping("/guest/cancel") Object guestCancel(@Valid @RequestBody GuestSecret input){return service.guestCancel(input.token);}
+    @PostMapping("/guest/reschedule") Object guestReschedule(@Valid @RequestBody GuestReschedule input){return service.guestReschedule(input);}
     @PutMapping("/me/password") void password(@Valid @RequestBody PasswordChange input){service.changePassword(input);}
     @PatchMapping("/admin/accounts/{id}") Object account(@PathVariable Long id,@Valid @RequestBody AccountUpdate input){return service.manageAccount(id,input);}
     @GetMapping("/staff/audit") Object audit(@RequestParam LocalDate from,@RequestParam LocalDate to,@RequestParam(defaultValue="") String search){return service.auditHistory(from,to,search);}
@@ -39,6 +40,8 @@ public class ApiController {
     @DeleteMapping("/staff/templates/{id}") void templateDelete(@PathVariable Long id){service.deleteTemplate(id);}
     @GetMapping("/staff/schedules/copy-week") Object copyWeek(@RequestParam Long doctorId,@RequestParam LocalDate from){return service.copyWeek(doctorId,from);}
     @PostMapping("/auth/login") Object login(@Valid @RequestBody Login input){return service.login(input.email,input.password);}
+    @PostMapping("/auth/forgot-password") Object forgot(@Valid @RequestBody ForgotPassword input){return service.forgotPassword(input);}
+    @PostMapping("/auth/reset-password") void reset(@Valid @RequestBody ResetPassword input){service.resetPassword(input);}
     @PostMapping("/auth/register") Object register(@Valid @RequestBody Registration input){return service.register(input);}
     @PostMapping("/auth/claim") Object claim(@Valid @RequestBody Claim input){return service.claim(input.appointmentId,input.claimToken,input.password);}
     @PostMapping("/auth/logout") void logout(@RequestHeader("Authorization")String token){service.logout(token.substring(7));}
@@ -47,9 +50,13 @@ public class ApiController {
     @GetMapping("/doctors") Object doctors(){return service.doctors();}
     @GetMapping("/doctors/{id}") Object doctor(@PathVariable Long id){return service.doctor(id);}
     @GetMapping("/schedules") Object schedules(@RequestParam Long doctorId,@RequestParam LocalDate date){return service.schedules(doctorId,date);}
+    @GetMapping("/availability") Object availabilitySearch(@RequestParam(required=false) Long doctorId,@RequestParam LocalDate from,@RequestParam LocalDate to){return service.availabilitySearch(doctorId,from,to);}
     @PostMapping("/appointments") Object book(@Valid @RequestBody Booking input){return service.book(input);}
     @GetMapping("/appointments/mine") Object mine(){return service.mine();}
     @PatchMapping("/appointments/{id}/status") Object status(@PathVariable Long id,@Valid @RequestBody Status input){return service.status(id,input.status);}
+    @PostMapping("/appointments/{id}/reschedule") Object reschedule(@PathVariable Long id,@Valid @RequestBody RescheduleInput input){return service.patientReschedule(id,input);}
+    @GetMapping("/staff/patients") Object patientLookup(@RequestParam(defaultValue="") String search){return service.patientLookup(search);}
+    @PostMapping("/staff/appointments") Object staffBook(@Valid @RequestBody Booking input){return service.book(input);}
     @GetMapping("/staff/doctors") Object staffDoctors(){return service.staffDoctors();}
     @GetMapping("/staff/permissions") Object permissions(){return service.permissions();}
     @GetMapping("/staff/appointments") Object staffAppointments(@RequestParam LocalDate from,@RequestParam LocalDate to){return service.staffAppointments(from,to);}

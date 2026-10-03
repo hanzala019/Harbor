@@ -1,0 +1,7 @@
+CREATE TABLE password_resets (
+    account_id BIGINT PRIMARY KEY REFERENCES accounts(id),
+    hash VARCHAR(64) NOT NULL UNIQUE,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    used BOOLEAN NOT NULL DEFAULT FALSE
+);

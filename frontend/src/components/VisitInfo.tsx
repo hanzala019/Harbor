@@ -1,0 +1,8 @@
+import {Link} from 'react-router-dom';
+import {hospitalInfo} from '../api';
+import {Button} from './ui/button';
+export function VisitInfo({compact=false}:{compact?:boolean}){
+  const info=hospitalInfo,phone=info.receptionPhone.replace(/[^+\d]/g,''),directions=/^https?:\/\//i.test(info.directionsUrl)?info.directionsUrl:info.hospitalAddress?'https://www.google.com/maps/search/?api=1&query='+encodeURIComponent(info.hospitalAddress):'';
+  return <section className={compact?'mt-6 border-t pt-5':'card'}><h2 className={compact?'text-lg':'text-2xl'}>Plan your visit</h2><p className="my-3 text-sm text-slate-600">{info.visitInstructions}</p><p className="text-sm text-slate-500">Your confirmation shows your estimated consultation and arrival times. Actual consultation times may vary.</p>{info.hospitalAddress&&<p className="mt-3"><strong>Address: </strong>{info.hospitalAddress}</p>}<div className="flex flex-wrap gap-3 mt-4">{phone&&<Button asChild variant="outline"><a href={'tel:'+phone}>Call reception · {info.receptionPhone}</a></Button>}{directions&&<Button asChild variant="outline"><a href={directions} target="_blank" rel="noopener noreferrer">Get directions</a></Button>}{compact&&<Button asChild variant="ghost"><Link to="/visit-info">Visit & contact information</Link></Button>}</div>{!info.hospitalAddress&&!phone&&<p className="mt-3 text-sm text-slate-500">Hospital contact details have not been published yet.</p>}</section>;
+}
+export function VisitInformation(){return <div className="page max-w-3xl"><span className="eyebrow">BEFORE YOUR APPOINTMENT</span><h1>Visit & contact information</h1><p className="page-subtitle">Keep your confirmation handy and check in at reception when you arrive.</p><VisitInfo/></div>;}

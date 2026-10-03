@@ -23,6 +23,13 @@ public final class Models {
         public String name, specialty, department, room;
         @Column(length=4000) public String biography;
     }
+    @Entity(name="PasswordReset") @Table(name="password_resets")
+    public static class PasswordReset {
+        @Id public Long accountId;
+        public String hash;
+        public Instant createdAt, expiresAt;
+        public Boolean used;
+    }
     @Entity(name="Schedule") @Table(name="schedules")
     public static class Schedule {
         @Id @GeneratedValue(strategy=GenerationType.IDENTITY) public Long id;

@@ -222,6 +222,90 @@ class HospitalIntegrationTest {
         success("PUT","/admin/permissions",Map.of("accountId",id,"doctorId",doctor,"editInfo",false,"editSchedule",true,"editAvailability",false),admin);
         assertEquals(1,success("POST","/staff/schedules/weekly",input,token).get("toCreate").asInt());
     }
+    @Test void availabilityFindsOnlyFutureFreeSlotsWithoutPatientData() throws Exception {
+        long full=schedule("2099-05-02",10);for(int i=0;i<3;i++)book(full,i,email());
+        long unavailable=schedule("2099-05-03",12);success("PATCH","/staff/schedules/"+unavailable+"/availability",Map.of("available",false),admin);
+        book(session,0,email());var results=success("GET","/availability?doctorId="+doctor+"&from=2099-05-01&to=2099-05-04",null,null);
+        assertEquals(1,results.size());assertEquals(session,results.get(0).path("schedule").path("id").asLong());assertEquals(1,results.get(0).path("slots").get(0).path("index").asInt());
+        assertFalse(results.toString().contains("email"));assertFalse(results.toString().contains("phone"));
+        assertEquals(400,request("GET","/availability?from=2099-05-01&to=2100-05-02",null,null).getResponse().getStatus());
+    }
+    @Test void patientReschedulingIsOwnedAtomicAndPreservesHistoryAndSerials() throws Exception {
+        var registered=success("POST","/auth/register",Map.of("patient",patient(email()),"password","patient-password"),null);String token=registered.get("token").asText();
+        var booked=success("POST","/appointments",Map.of("scheduleId",session,"slotIndex",2),token).get("appointment");long id=booked.get("id").asLong(),target=schedule("2099-05-02",12);book(target,0,email());
+        var input=Map.of("scheduleId",target,"slotIndex",0);
+        assertEquals(409,request("POST","/appointments/"+id+"/reschedule",input,token).getResponse().getStatus());
+        assertEquals(session,success("GET","/appointments/mine",null,token).get(0).get("scheduleId").asLong());
+        String stranger=success("POST","/auth/register",Map.of("patient",patient(email()),"password","patient-password"),null).get("token").asText();
+        assertEquals(403,request("POST","/appointments/"+id+"/reschedule",Map.of("scheduleId",target,"slotIndex",1),stranger).getResponse().getStatus());
+        var moved=success("POST","/appointments/"+id+"/reschedule",Map.of("scheduleId",target,"slotIndex",1),token);
+        assertEquals(id,moved.get("id").asLong());assertEquals(2,moved.get("serial").asInt());assertEquals("RESCHEDULED",moved.get("status").asText());assertEquals("09:20:00",moved.get("time").asText());
+        assertEquals(0,success("GET","/staff/schedules/"+session+"/affected",null,admin).size());assertNotNull(book(session,2,email()));
+        assertEquals(2,jdbc.queryForObject("select count(*) from mail_jobs where appointment_id=?",Integer.class,id));
+        assertTrue(jdbc.queryForObject("select details from audit_events where action='PATIENT_APPOINTMENT_RESCHEDULED' and entity_id=?",String.class,id).contains("2099-05-01"));
+        success("POST","/appointments/"+id+"/reschedule",Map.of("scheduleId",target,"slotIndex",2),token);
+        assertEquals(2,success("GET","/appointments/mine",null,token).get(0).get("serial").asInt());
+    }
+    @Test void guestReschedulingKeepsPrivateAccessAndRejectsRevokedOrInactiveLinks() throws Exception {
+        long id=book(session,0,email()).path("appointment").path("id").asLong(),target=schedule("2099-05-02",12);String raw=guestToken(id);
+        var result=success("POST","/guest/reschedule",Map.of("token",raw,"scheduleId",target,"slotIndex",0),null);
+        assertEquals(id,result.get("id").asLong());assertEquals(target,success("POST","/guest/view",Map.of("token",raw),null).get("scheduleId").asLong());
+        success("DELETE","/staff/appointments/"+id+"/guest-links",null,admin);
+        assertEquals(404,request("POST","/guest/reschedule",Map.of("token",raw,"scheduleId",session,"slotIndex",0),null).getResponse().getStatus());
+        long other=book(session,1,email()).path("appointment").path("id").asLong();String privateLink=guestToken(other);success("PATCH","/appointments/"+other+"/status",Map.of("status","VISITED"),admin);
+        assertEquals(409,request("POST","/guest/reschedule",Map.of("token",privateLink,"scheduleId",target,"slotIndex",1),null).getResponse().getStatus());
+    }
+    @Test void twoReschedulesCannotTakeTheSameSlotAndTheLosingBookingSurvives() throws Exception {
+        long a=book(session,0,email()).path("appointment").path("id").asLong(),b=book(session,1,email()).path("appointment").path("id").asLong(),target=schedule("2099-05-02",12);String first=guestToken(a),second=guestToken(b);
+        ExecutorService pool=Executors.newFixedThreadPool(2);CountDownLatch start=new CountDownLatch(1);
+        try{var one=pool.submit(()->{start.await();return request("POST","/guest/reschedule",Map.of("token",first,"scheduleId",target,"slotIndex",0),null).getResponse().getStatus();});var two=pool.submit(()->{start.await();return request("POST","/guest/reschedule",Map.of("token",second,"scheduleId",target,"slotIndex",0),null).getResponse().getStatus();});start.countDown();var statuses=new ArrayList<>(List.of(one.get(20,TimeUnit.SECONDS),two.get(20,TimeUnit.SECONDS)));Collections.sort(statuses);assertEquals(List.of(200,409),statuses);}finally{pool.shutdownNow();}
+        assertEquals(1,success("GET","/staff/schedules/"+session+"/affected",null,admin).size());assertEquals(1,success("GET","/staff/schedules/"+target+"/affected",null,admin).size());
+    }
+    @Test void reschedulingRejectsDuplicatesOtherDoctorsAndPastAppointments() throws Exception {
+        String mail=email();long id=book(session,0,mail).path("appointment").path("id").asLong(),target=schedule("2099-05-02",12);String raw=guestToken(id);book(target,0,mail);
+        assertEquals(409,request("POST","/guest/reschedule",Map.of("token",raw,"scheduleId",target,"slotIndex",1),null).getResponse().getStatus());
+        long otherDoctor=success("POST","/admin/doctors",Map.of("name","Other","specialty","General","department","Primary","room","13"),admin).get("id").asLong();
+        long otherSession=success("POST","/staff/schedules",Map.of("doctorId",otherDoctor,"date","2099-05-02","startsAt","09:00","endsAt","12:00","minutes",20,"available",true),admin).get("id").asLong();
+        assertEquals(400,request("POST","/guest/reschedule",Map.of("token",raw,"scheduleId",otherSession,"slotIndex",0),null).getResponse().getStatus());
+        jdbc.update("update schedules set date=? where id=?",java.sql.Date.valueOf(LocalDate.now().minusDays(1)),session);
+        assertEquals(409,request("POST","/guest/reschedule",Map.of("token",raw,"scheduleId",target,"slotIndex",2),null).getResponse().getStatus());
+    }
+    String resetToken(String mail){String body=jdbc.queryForObject("select body from mail_jobs where recipient=? and subject='Reset your hospital account password' order by id desc limit 1",String.class,mail);var matcher=java.util.regex.Pattern.compile("reset-password#([A-Za-z0-9_-]+)").matcher(body);assertTrue(matcher.find());return matcher.group(1);}
+    @Test void passwordRecoveryIsGenericHashedSingleUseAndRevokesSessions() throws Exception {
+        String mail=email();var registration=success("POST","/auth/register",Map.of("patient",patient(mail),"password","patient-password"),null);String token=registration.get("token").asText();long id=registration.path("user").path("id").asLong();
+        var known=success("POST","/auth/forgot-password",Map.of("email",mail),null);var unknown=success("POST","/auth/forgot-password",Map.of("email",email()),null);assertEquals(known,unknown);
+        String raw=resetToken(mail);assertNotEquals(raw,jdbc.queryForObject("select hash from password_resets where account_id=?",String.class,id));
+        success("POST","/auth/forgot-password",Map.of("email",mail),null);assertEquals(1,jdbc.queryForObject("select count(*) from mail_jobs where recipient=?",Integer.class,mail));
+        success("POST","/auth/reset-password",Map.of("token",raw,"newPassword","recovered-password"),null);
+        assertEquals(401,request("GET","/me",null,token).getResponse().getStatus());assertNotNull(login(mail,"recovered-password"));
+        assertEquals(400,request("POST","/auth/reset-password",Map.of("token",raw,"newPassword","another-password"),null).getResponse().getStatus());
+        assertFalse(success("GET","/staff/mail",null,admin).toString().contains(raw));
+    }
+    @Test void recoveryRejectsExpiredReplacedAndDisabledAccountTokens() throws Exception {
+        String mail=email();var staff=success("POST","/admin/receptionists",Map.of("patient",patient(mail),"password","staff-password"),admin);long id=staff.get("id").asLong();
+        success("POST","/auth/forgot-password",Map.of("email",mail),null);String raw=resetToken(mail);
+        jdbc.update("update password_resets set expires_at=?,created_at=? where account_id=?",java.sql.Timestamp.from(Instant.now().minusSeconds(1)),java.sql.Timestamp.from(Instant.now().minusSeconds(120)),id);
+        assertEquals(400,request("POST","/auth/reset-password",Map.of("token",raw,"newPassword","recovered-password"),null).getResponse().getStatus());
+        success("POST","/auth/forgot-password",Map.of("email",mail),null);String fresh=resetToken(mail);assertNotEquals(raw,fresh);
+        assertEquals(400,request("POST","/auth/reset-password",Map.of("token",raw,"newPassword","recovered-password"),null).getResponse().getStatus());
+        success("PATCH","/admin/accounts/"+id,Map.of("enabled",false),admin);
+        assertEquals(400,request("POST","/auth/reset-password",Map.of("token",fresh,"newPassword","recovered-password"),null).getResponse().getStatus());
+        success("POST","/auth/forgot-password",Map.of("email",mail),null);assertEquals(2,jdbc.queryForObject("select count(*) from mail_jobs where recipient=?",Integer.class,mail));
+    }
+    @Test void staffBookingAndLookupAreScopedAndCanLinkRegisteredPatients() throws Exception {
+        String staffMail=email();long staff=success("POST","/admin/receptionists",Map.of("patient",patient(staffMail),"password","staff-password"),admin).get("id").asLong();String staffToken=login(staffMail,"staff-password");
+        String mail=email();var registered=success("POST","/auth/register",Map.of("patient",patient(mail),"password","patient-password"),null);long account=registered.path("user").path("id").asLong();String patientToken=registered.get("token").asText();
+        success("POST","/appointments",Map.of("scheduleId",session,"slotIndex",0),patientToken);
+        assertEquals(0,success("GET","/staff/patients?search="+mail,null,staffToken).size());
+        assertEquals(403,request("POST","/appointments",Map.of("scheduleId",session,"slotIndex",1,"patient",patient(email())),staffToken).getResponse().getStatus());
+        success("PUT","/admin/permissions",Map.of("accountId",staff,"doctorId",doctor,"editInfo",false,"editSchedule",false,"editAvailability",false),admin);
+        var choices=success("GET","/staff/patients?search="+mail,null,staffToken);assertEquals(account,choices.get(0).get("accountId").asLong());assertFalse(choices.toString().contains("password"));
+        long target=schedule("2099-05-02",12);var linked=success("POST","/staff/appointments",Map.of("scheduleId",target,"slotIndex",0,"patientAccountId",account),staffToken).get("appointment");
+        assertEquals(mail,linked.get("email").asText());assertEquals(2,success("GET","/appointments/mine",null,patientToken).size());
+        assertEquals(403,request("POST","/appointments",Map.of("scheduleId",target,"slotIndex",1,"patientAccountId",account,"patient",patient(email())),null).getResponse().getStatus());
+        String unrelated=email();long unknownAccount=success("POST","/auth/register",Map.of("patient",patient(unrelated),"password","patient-password"),null).path("user").path("id").asLong();
+        assertEquals(403,request("POST","/staff/appointments",Map.of("scheduleId",target,"slotIndex",1,"patientAccountId",unknownAccount),staffToken).getResponse().getStatus());
+    }
     @Test void bulkAssignmentsAreAtomicIdempotentAndAdminOnly() throws Exception {
         String mail=email();long staff=success("POST","/admin/receptionists",Map.of("patient",patient(mail),"password","staff-password"),admin).get("id").asLong();String token=login(mail,"staff-password");
         long second=success("POST","/admin/doctors",Map.of("name","Second doctor "+UUID.randomUUID(),"specialty","General","department","Primary","room","13","biography","Test"),admin).get("id").asLong();

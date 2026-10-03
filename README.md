@@ -6,6 +6,8 @@ React + TypeScript/Vite, shadcn/ui + Tailwind, Spring Boot REST API, Spring Secu
 
 **V1 is the baseline; all 18 agreed V2 enhancements are implemented and covered by native and Docker verification.** Feature completion and deployment status are tracked in [`ROADMAP.md`](ROADMAP.md). Docker Desktop Linux-container builds, browser workflows through nginx, Mailpit delivery, and database persistence across Compose shutdown/restart have passed on this device.
 
+**V3 adds patient and reception convenience:** next-available discovery, patient/guest date-time changes, a dedicated receptionist booking workflow, and email password recovery with configurable visit/contact information. Commit `b3c98e8` records the completed V2 baseline before this update.
+
 ## Quick local startup (V2)
 
 Stop any older backend/frontend terminals with **Ctrl+C**, then run from the repository root:
@@ -109,6 +111,23 @@ For Gmail, use `SMTP_HOST=smtp.gmail.com`, `SMTP_PORT=587`, `SMTP_AUTH=true`, an
 
 ## Features and workflows
 
+### V3 patient and reception convenience
+
+- **Find an available appointment:** Find a doctor defaults to **Next available (next 90 days)** and displays each doctor's earliest bookable date/time. Custom date, Today, Tonight, and Tomorrow show only doctors with matching future slots. Today includes later sessions, not just sessions currently underway; Tonight starts at 18:00 in the hospital timezone. Doctor booking and date-change screens have **Next available appointment** and an expandable list of available dates for the next 90 days from the chosen date. You can also enter dates beyond that discovery window manually.
+- **Change date / time:** registered patients use My appointments; guests use the private link in their email. Select another slot with the same doctor, review the new details, and confirm. The original booking remains intact if the destination is unavailable, occupied, or a duplicate. Changes are atomic under stable schedule locks, retain the appointment ID, free the old slot, and queue an updated email. Moving to another session assigns a destination-local serial; changing time within the same session keeps the serial. Existing unexpired guest links continue to manage that same appointment. Audit history records the old and new session/date/time/serial.
+- **Receptionist booking:** Appointments → **Book for a patient** opens `/staff/book` for walk-in/telephone bookings. Select an assigned doctor/time, search existing patients by name/email/phone, or enter new guest details. Admin can search registered patients; receptionists can reuse patients from assigned-doctor appointment history only. Selecting a registered patient links the booking to their account and uses their saved profile. Guests receive private management links without requiring registration. Duplicate alerts require a deliberate second confirmation; all staff bookings enforce doctor access on the backend.
+- **Forgot password:** Login → **Forgot password?** requests an email link with a generic response for unknown/disabled accounts. Enabled accounts can request one link per minute. Links use URL fragments, are hashed in the database, expire after 30 minutes, and work once; a newer request invalidates the earlier link. A successful reset revokes all login sessions. Authenticated password changes and Admin resets/disabling invalidate outstanding recovery links. `MAIL_ENABLED=true`, working SMTP, and a reachable `PUBLIC_URL`/`DOCKER_PUBLIC_URL` are needed for delivery.
+- **Plan your visit:** the homepage, footer, booking confirmation, patient appointments, and private guest view link to `/visit-info`. Supply real details using the unquoted `.env` values below, then restart the backend (or recreate Compose containers):
+
+  ```dotenv
+  HOSPITAL_ADDRESS=Your hospital's real street address
+  RECEPTION_PHONE=Your hospital's real reception phone
+  DIRECTIONS_URL=https://your-hospital.example/directions
+  VISIT_INSTRUCTIONS=Bring your appointment confirmation and relevant medical records. Check in at reception before going to your consultation room.
+  ```
+
+  The page offers click-to-call and directions when configured, and explains arrival/check-in guidance. Without `DIRECTIONS_URL`, a configured address provides a map-search link. Blank contact fields are not replaced with invented details. Confirmation/rescheduling emails include the configured address, reception phone, directions, and instructions.
+
 ### V2 quality-of-life features
 
 - **Calendar and templates:** the Doctors page has a seven-day calendar with session hours, booking counts, and availability. Click a day/session to open its actions. **Copy this week** opens the weekly wizard with its available hours; mixed visit durations require separate templates. Save named templates inside the wizard, search/select one to reuse it, and preview before applying it to another date window.
@@ -155,10 +174,10 @@ npm test
 
 Backend tests use an isolated H2 database in PostgreSQL mode and apply the same Flyway migration. To run against a **dedicated empty PostgreSQL test database**, set `TEST_DB_URL`, `TEST_DB_USER`, and `TEST_DB_PASSWORD` before running tests. Tests create test accounts/doctors/bookings: never point these variables at your normal hospital database.
 
-V2 browser tests use Playwright, a local SMTP fixture, and a dedicated PostgreSQL database. Build the backend first, create an empty database such as `harbor_v2_test`, then in `frontend`:
+V2 and V3 browser tests use Playwright, a local SMTP fixture, and a dedicated PostgreSQL database. Build the backend first, create an empty database such as `harbor_v3_test`, then in `frontend`:
 
 ```powershell
-$env:TEST_DB_URL = 'jdbc:postgresql://localhost:5432/harbor_v2_test'
+$env:TEST_DB_URL = 'jdbc:postgresql://localhost:5432/harbor_v3_test'
 $env:TEST_DB_USER = 'postgres'
 $env:TEST_DB_PASSWORD = 'postgres'
 npm ci
@@ -166,7 +185,7 @@ npx playwright install chromium
 npm run test:e2e
 ```
 
-The runner starts isolated backend/frontend processes (default ports 28080 and 15173), captures SMTP messages locally without Gmail, creates fixtures, exercises the V2 interfaces, and stops its own servers. It restores the test Admin password after its password-change check. Choose free ports with `E2E_BACKEND_PORT`/`E2E_WEB_PORT`; set `E2E_JAVA` if `java` on PATH is not JDK 17+. Use a dedicated test database; fixtures are retained there for inspection.
+The runner starts isolated backend/frontend processes (default ports 28080 and 15173), captures SMTP messages locally without Gmail, creates fixtures, exercises the V2 and V3 interfaces, and stops its own servers. It supplies clearly fictional contact details and restores the test Admin password after its password-change check. Choose free ports with `E2E_BACKEND_PORT`/`E2E_WEB_PORT`; set `E2E_JAVA` if `java` on PATH is not JDK 17+. Use a dedicated empty test database for each complete run; fixtures are retained there for inspection.
 
 ## Structure
 

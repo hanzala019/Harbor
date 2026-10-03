@@ -23,8 +23,8 @@ public class SecurityConfig {
         return http.csrf(c -> c.disable()) // No cookies: only explicit bearer tokens authenticate API requests.
             .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(a -> a
-                .requestMatchers("/api/health", "/api/config", "/api/guest/**", "/api/auth/login", "/api/auth/register", "/api/auth/claim").permitAll()
-                .requestMatchers(org.springframework.http.HttpMethod.GET, "/api/doctors", "/api/doctors/*", "/api/schedules").permitAll()
+                .requestMatchers("/api/health", "/api/config", "/api/guest/**", "/api/auth/login", "/api/auth/register", "/api/auth/claim", "/api/auth/forgot-password", "/api/auth/reset-password").permitAll()
+                .requestMatchers(org.springframework.http.HttpMethod.GET, "/api/doctors", "/api/doctors/*", "/api/schedules", "/api/availability").permitAll()
                 .requestMatchers(org.springframework.http.HttpMethod.POST, "/api/appointments").permitAll()
                 .requestMatchers("/api/admin/**").hasRole("ADMIN")
                 .requestMatchers("/api/staff/**").hasAnyRole("ADMIN", "RECEPTIONIST")
