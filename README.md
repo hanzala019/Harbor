@@ -193,6 +193,6 @@ The runner starts isolated backend/frontend processes (default ports 28080 and 1
 - `backend/src/main/resources/db/migration`: versioned database schema; add new migrations rather than editing applied versions.
 - `frontend/src/pages`: public booking, patient account, and staff/admin views.
 - `frontend/src/components/ui`: shadcn-style Radix primitives.
-- `requirements.md`: full product requirements; `AGENTS.md`: implementation constraints for future sessions.
+
 
 This is an initial implementation. Hospital contact details, real testimonials, and staff biographies should be supplied by the hospital; illustrative/demo data is not a claim about a real facility.
