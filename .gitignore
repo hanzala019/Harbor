@@ -2,7 +2,8 @@ node_modules/
 dist/
 target/
 .env
-.ROADMAP.md
+ROADMAP.md
+requirements.md
 *.log
 .idea/
 .vscode/
